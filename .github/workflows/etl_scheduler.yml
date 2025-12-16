@@ -1,0 +1,36 @@
+name: Weekly TDCC ETL
+
+on:
+  # 1. 排程執行：每週六早上 02:00 (台灣時間約上午 10:00)
+  # 集保資料通常週五晚上更新，週六早上抓最保險
+  schedule:
+    - cron: '0 2 * * 6'
+  
+  # 2. 手動觸發：方便隨時補跑
+  workflow_dispatch:
+
+jobs:
+  run-etl:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install requests # 確保 requests 有被安裝
+
+      - name: Execute ETL Script
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python src/etl.py
