@@ -1,15 +1,15 @@
-# 2024-12-16 20:00:00: [Fix] 修正編碼為 UTF-8、支援西元年格式、清洗 URL
+# 2024-12-16 21:30:00: [Feat] 新增清洗規則: 去除空白、僅保留4碼個股
 import os
 import sys
 import requests
 import pandas as pd
 import io
+import re  # 新增 regex 模組
 from datetime import datetime
 from supabase import create_client, Client
 
 # --- 1. 設定與常數 ---
 TDCC_URL = "https://smart.tdcc.com.tw/opendata/getOD.ashx?id=1-5"
-# 清洗環境變數，移除可能存在的空白或結尾斜線
 SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").strip().rstrip("/")
 SUPABASE_KEY = (os.environ.get("SUPABASE_SERVICE_KEY") or "").strip()
 BUCKET_NAME = "tdcc_raw_files"
@@ -19,12 +19,10 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
 }
 
-# 檢查環境變數
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("❌ 錯誤: 缺少環境變數 SUPABASE_URL 或 SUPABASE_SERVICE_KEY")
     sys.exit(1)
 
-# 初始化 Supabase
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
@@ -35,7 +33,7 @@ def run_etl():
     print(f"🚀 開始執行 ETL 任務: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # --- 2. 下載資料 (Extract) ---
-    print("📥 正在從集保中心下載 CSV (已偽裝 Header)...")
+    print("📥 正在從集保中心下載 CSV...")
     try:
         response = requests.get(TDCC_URL, headers=HEADERS, timeout=60)
         response.raise_for_status()
@@ -45,13 +43,12 @@ def run_etl():
         print(f"❌ 下載失敗: {e}")
         sys.exit(1)
 
-    # --- 3. 備份原始檔 (Backup to Storage) ---
+    # --- 3. 備份原始檔 (Backup) ---
     today_str = datetime.now().strftime("%Y%m%d")
     backup_filename = f"TDCC_{today_str}.csv"
     
-    print(f"💾 正在備份原始檔至 Storage: {backup_filename}...")
+    print(f"💾 正在備份至 Storage: {backup_filename}...")
     try:
-        # 修正: 確保 file_options 正確
         supabase.storage.from_(BUCKET_NAME).upload(
             path=backup_filename,
             file=raw_content,
@@ -59,85 +56,73 @@ def run_etl():
         )
         print("   ✅ 備份成功！")
     except Exception as e:
-        # 備份失敗通常不影響後續流程，印出警告即可
-        print(f"⚠️ 備份警示 (非致命): {e}")
+        print(f"⚠️ 備份警示: {e}")
 
     # --- 4. 資料清洗 (Transform) ---
     print("🧹 正在清洗資料...")
     df = None
     
-    # 嘗試多種編碼讀取
+    # 嘗試解碼
     try:
-        # 優先嘗試 UTF-8 (近期 TDCC 格式)
-        print("   嘗試使用 utf-8 解碼...")
         df = pd.read_csv(io.BytesIO(raw_content), encoding="utf-8", dtype=str)
     except UnicodeDecodeError:
         try:
-            # 失敗則嘗試 Big5 (舊格式)
-            print("   utf-8 失敗，改用 big5 解碼...")
             df = pd.read_csv(io.BytesIO(raw_content), encoding="big5", dtype=str)
         except Exception as e:
-            print(f"❌ 資料解碼完全失敗: {e}")
+            print(f"❌ 解碼失敗: {e}")
             sys.exit(1)
 
     try:
-        # 重新命名欄位 (確保對應資料庫)
-        # 預期欄位: 資料日期,證券代號,持股分級,人數,股數,占集保庫存數比例%
         if len(df.columns) >= 6:
             df.columns = ["date", "stock_id", "level", "persons", "shares", "percent"]
         else:
-            raise ValueError(f"CSV 欄位數量不足 ({len(df.columns)})，預期至少 6 欄")
+            raise ValueError(f"CSV 欄位不足: {len(df.columns)}")
 
-        # --- 日期轉換邏輯 (支援 西元年 與 民國年) ---
+        # [新增規則] 處理 stock_id: 去空白 + 篩選4碼數字
+        original_count = len(df)
+        df['stock_id'] = df['stock_id'].astype(str).str.strip() # 去除前後空白
+        
+        # 使用 Regex 篩選: ^\d{4}$ 代表從頭到尾只有4個數字
+        # 排除 0050(ETF), 2330(個股) -> 保留
+        # 排除 23301(期貨?), 99999(合計), 00632R(ETF) -> 剔除
+        df = df[df['stock_id'].str.match(r'^\d{4}$')]
+        
+        filtered_count = len(df)
+        print(f"   [篩選] 僅保留 4 碼個股: {original_count} -> {filtered_count} (剔除 {original_count - filtered_count} 筆)")
+
+        # 日期處理
         def convert_date(date_str):
             if pd.isna(date_str): return None
             s = str(date_str).strip()
-            
             try:
-                # Case 1: 8位數西元年 (例如 20251212)
-                if len(s) == 8:
-                    return f"{s[:4]}-{s[4:6]}-{s[6:]}"
-                
-                # Case 2: 7位數民國年 (例如 1141212)
+                if len(s) == 8: return f"{s[:4]}-{s[4:6]}-{s[6:]}"
                 elif len(s) == 7:
-                    year = int(s[:-4]) + 1911
-                    month = s[-4:-2]
-                    day = s[-2:]
-                    return f"{year}-{month}-{day}"
-                
-                # Case 3: 已經是格式化的日期 (例如 2025/12/12)
+                    return f"{int(s[:-4]) + 1911}-{s[-4:-2]}-{s[-2:]}"
                 elif '/' in s or '-' in s:
                     return pd.to_datetime(s).strftime('%Y-%m-%d')
-                
-                else:
-                    return None
-            except:
                 return None
+            except: return None
 
         df['date'] = df['date'].apply(convert_date)
 
-        # 數值清洗
-        cols_to_clean = ['persons', 'shares', 'percent']
-        for col in cols_to_clean:
+        # 數值處理
+        for col in ['persons', 'shares', 'percent']:
             df[col] = df[col].str.replace(',', '', regex=False)
             df[col] = pd.to_numeric(df[col], errors='coerce')
-
+        
         df['level'] = pd.to_numeric(df['level'], errors='coerce')
 
-        # 移除空值列
+        # 移除無效資料
         df.dropna(subset=['date', 'stock_id', 'level'], inplace=True)
         
         print(f"   清洗完成！準備寫入 {len(df)} 筆資料...")
-        # 顯示前一筆資料供確認
-        print(f"   [Preview] 第一筆資料: {df.iloc[0].to_dict()}")
 
     except Exception as e:
-        print(f"❌ 資料清洗邏輯失敗: {e}")
+        print(f"❌ 清洗失敗: {e}")
         sys.exit(1)
 
-    # --- 5. 寫入資料庫 (Load / Upsert) ---
-    print("📤 正在寫入 Supabase 資料庫 (分批寫入)...")
-    
+    # --- 5. 寫入資料庫 (Load) ---
+    print("📤 正在寫入資料庫...")
     records = df.to_dict(orient='records')
     BATCH_SIZE = 1000
     total_inserted = 0
@@ -147,14 +132,13 @@ def run_etl():
             batch = records[i : i + BATCH_SIZE]
             supabase.table("equity_distribution").upsert(batch).execute()
             total_inserted += len(batch)
-            
             if (i // BATCH_SIZE) % 10 == 0:
                  print(f"   已寫入: {total_inserted} / {len(records)}")
             
-        print(f"✅ ETL 任務全部完成！總共寫入 {total_inserted} 筆資料。")
+        print(f"✅ ETL 完成！共寫入 {total_inserted} 筆。")
 
     except Exception as e:
-        print(f"❌ 資料庫寫入失敗: {e}")
+        print(f"❌ 寫入失敗: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
