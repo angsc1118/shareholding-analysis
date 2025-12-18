@@ -218,14 +218,14 @@ with tab2:
                     # 按鈕邏輯
                     if st.button("⚡ 啟動 AI 智能分析", key="btn_ai_analysis"):
                             with st.spinner(f"正在連線 Claude 分析 {target_stock} 籌碼結構..."):
-                    # 呼叫我們剛寫好的函式
-                    analysis_result = generate_chip_analysis(target_stock, df_detail)
+                            # 呼叫我們剛寫好的函式
+                            analysis_result = generate_chip_analysis(target_stock, df_detail)
         
-                    # 顯示結果
-                    with ai_container:
-                        st.markdown("### 📝 分析報告")
-                        st.markdown(analysis_result)
-                        st.caption("註：AI 分析僅供參考，不代表投資建議。")
+                            # 顯示結果
+                            with ai_container:
+                                st.markdown("### 📝 分析報告")
+                                st.markdown(analysis_result)
+                                st.caption("註：AI 分析僅供參考，不代表投資建議。")
 
                     st.divider()                    
                     
