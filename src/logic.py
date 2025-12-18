@@ -32,7 +32,8 @@ def calculate_top_growth(this_week_date: str, last_week_date: str, top_n=20) -> 
     result = merged.sort_values('change_pct', ascending=False).head(top_n)
     
     # 5. 格式化輸出欄位
-    final_df = result[['stock_id', 'percent_this', 'change_pct', 'shares_this']].copy()
+    # 修正: merge 後因為 shares 只存在於左邊，所以不會加上 _this 後綴，欄位名稱仍為 'shares'
+    final_df = result[['stock_id', 'percent_this', 'change_pct', 'shares']].copy()
     final_df.columns = ['股票代號', '大戶持股比%', '週增減%', '持有股數']
     
     return final_df
