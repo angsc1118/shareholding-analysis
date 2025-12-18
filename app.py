@@ -28,7 +28,8 @@ def apply_color_style(val):
             return 'color: #0df768; font-weight: bold;' # Streamlit Green (Bright)
     return ''
 
-def format_stock_table(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+
+def format_stock_table(df: pd.DataFrame):
     """
     針對「個股詳細籌碼表」進行精緻化排版：
     1. 隱藏 Diff 輔助欄位
