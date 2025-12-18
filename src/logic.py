@@ -2,8 +2,7 @@
 import pandas as pd
 import yfinance as yf
 import streamlit as st
-from database import get_market_snapshot, get_stock_raw_history
-
+from src.database import get_market_snapshot, get_stock_raw_history
 # --- 1. 市場分析邏輯 (Market Logic) ---
 
 def calculate_top_growth(this_week_date: str, last_week_date: str, top_n=20) -> pd.DataFrame:
