@@ -2,3 +2,4 @@ supabase>=2.0.0
 pandas
 yfinance
 requests
+anthropic
