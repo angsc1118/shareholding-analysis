@@ -1,9 +1,9 @@
-# 2025-12-18 16:00:00: [Fix] 完整 app.py (含 AI 分析整合、縮排修正、欄位 Key 修正)
+# 2025-12-18 17:00:00: [Feat] 完整 app.py (含 AI 分析、Prompt 除錯視窗、縮排修正)
 import streamlit as st
 import pandas as pd
 from src.database import get_latest_date, get_available_dates
 from src.logic import calculate_top_growth, get_stock_distribution_table
-from src.ai_analyst import generate_chip_analysis  # [新增] 引入 AI 分析模組
+from src.ai_analyst import generate_chip_analysis  # 引入 AI 分析模組
 
 # --- 1. 頁面全域設定 (Page Config) ---
 st.set_page_config(
@@ -72,7 +72,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 關於系統")
     st.caption("本系統整合集保結算所 (TDCC) 每週股權分散數據與 Yahoo Finance 股價，提供大戶籌碼動向分析。")
-    st.caption("Version: 1.1.0 (AI Enabled)")
+    st.caption("Version: 1.2.0 (AI Debug Mode)")
 
 # --- 4. 主頁面 (Main Content) ---
 st.title("📊 台股籌碼資產戰情室")
@@ -119,7 +119,6 @@ with tab1:
                             "週增減%": st.column_config.NumberColumn(
                                 "週增減 (%)", format="%.2f %%", 
                             ),
-                            # [修正] 這裡對應 logic.py 回傳的 '持有股數' (原 shares)
                             "持有股數": st.column_config.ProgressColumn(
                                 "持有股數 (視覺化)", format="%d", min_value=0, max_value=int(top_growth_df['持有股數'].max())
                             )
@@ -178,25 +177,29 @@ with tab2:
                     chart_data = df_detail.sort_values('date', ascending=True).set_index('date')
                     st.subheader("📊 股價 vs 千張大戶持股比 走勢")
                     
-                    # 這裡示範簡單版折線圖，若需雙軸可改用 plotly
                     st.line_chart(chart_data[['>1000張_比例', '>400張_比例']])
 
                     st.divider()
 
-                    # --- [新增] AI 分析區塊 ---
+                    # --- [Updated] AI 分析區塊 ---
                     st.subheader("🤖 AI 籌碼解讀 (Claude 3.5)")
                     
                     ai_container = st.container()
                     
-                    # [修正] 縮排邏輯修正：with st.spinner 下方必須縮排
                     if st.button("⚡ 啟動 AI 智能分析", key="btn_ai_analysis"):
                         with st.spinner(f"正在連線 Claude 分析 {target_stock} 籌碼結構..."):
-                            analysis_result = generate_chip_analysis(target_stock, df_detail)
+                            # [關鍵] 接收兩個回傳值：結果與 Debug Prompt
+                            analysis_result, debug_prompt = generate_chip_analysis(target_stock, df_detail)
                             
                             with ai_container:
                                 st.markdown("### 📝 分析報告")
                                 st.markdown(analysis_result)
                                 st.caption("註：AI 分析僅供參考，不代表投資建議。")
+                                
+                                # [新增] 開發者除錯視窗
+                                with st.expander("🕵️ [開發者模式] 查看傳送給 AI 的完整 Prompt"):
+                                    st.info("這是實際傳送給 Claude 的完整內容 (包含 System Prompt 與 Markdown 數據表格)")
+                                    st.code(debug_prompt, language='markdown')
 
                     st.divider()
 
