@@ -49,25 +49,18 @@ def get_latest_date():
 
 def get_available_dates(limit=10):
     """
-    取得最近的 N 個資料日期 (用於下拉選單)
-    注意：因為 distinct 在 Supabase API 支援度有限，這裡改用 rpc 或 pandas 處理
-    為求穩健，我們先撈 distinct dates (資料量不大)
+    取得最近的資料日期 (使用 RPC 呼叫資料庫函數，效能最佳化)
     """
     client = init_supabase()
     try:
-        # 這裡利用簡單的技巧：只撈 date 欄位，回傳後由 Pandas 去重
-        # 若資料量極大，建議改寫為 Database Function (RPC)
-        response = client.table("equity_distribution") \
-            .select("date") \
-            .order("date", desc=True) \
-            .limit(5000) \
-            .execute() # 假設每週 2000 檔，撈 5000 筆大約涵蓋 2-3 週
-            
+        # 改用 rpc (Remote Procedure Call) 呼叫剛剛建立的 SQL 函數
+        response = client.rpc("get_distinct_dates").execute()
+        
         if response.data:
-            df = pd.DataFrame(response.data)
-            # 去重並排序
-            unique_dates = sorted(df['date'].unique(), reverse=True)
-            return unique_dates[:limit]
+            # response.data 會是 [{'date_value': '2025-12-12'}, ...]
+            # 我們需要把它轉成純 list
+            dates = [item['date_value'] for item in response.data]
+            return dates[:limit]
         return []
     except Exception as e:
         st.error(f"查詢日期列表失敗: {e}")
