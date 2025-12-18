@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 from src.database import get_latest_date, get_available_dates
 from src.logic import calculate_top_growth, get_stock_distribution_table
+from src.ai_analyst import generate_chip_analysis
 
 # --- 1. 頁面全域設定 (Page Config) ---
 st.set_page_config(
@@ -208,6 +209,26 @@ with tab2:
                     st.line_chart(chart_data[['>1000張_比例', '>400張_比例']])
 
                     st.divider()
+                    # --- AI 分析區塊 ---
+                    st.subheader("🤖 AI 籌碼解讀 (Claude 3.5)")
+
+                    # 建立一個容器來放分析結果
+                    ai_container = st.container()
+
+                    # 按鈕邏輯
+                    if st.button("⚡ 啟動 AI 智能分析", key="btn_ai_analysis"):
+                            with st.spinner(f"正在連線 Claude 分析 {target_stock} 籌碼結構..."):
+                    # 呼叫我們剛寫好的函式
+                    analysis_result = generate_chip_analysis(target_stock, df_detail)
+        
+                    # 顯示結果
+                    with ai_container:
+                        st.markdown("### 📝 分析報告")
+                        st.markdown(analysis_result)
+                        st.caption("註：AI 分析僅供參考，不代表投資建議。")
+
+                    st.divider()                    
+                    
 
                     # 3. 詳細數據表格 (套用紅漲綠跌樣式)
                     st.subheader("📋 詳細籌碼變化表")
