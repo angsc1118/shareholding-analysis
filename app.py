@@ -1,34 +1,19 @@
-# 2025-12-18 11:00:00: [Feat] 前端介面：整合市場排行與個股詳細分析 (UI/UX 優化版)
+# 2025-12-18 16:00:00: [Fix] 完整 app.py (含 AI 分析整合、縮排修正、欄位 Key 修正)
 import streamlit as st
 import pandas as pd
 from src.database import get_latest_date, get_available_dates
 from src.logic import calculate_top_growth, get_stock_distribution_table
-from src.ai_analyst import generate_chip_analysis
+from src.ai_analyst import generate_chip_analysis  # [新增] 引入 AI 分析模組
 
 # --- 1. 頁面全域設定 (Page Config) ---
 st.set_page_config(
     page_title="台股籌碼戰情室",
     page_icon="📈",
-    layout="wide", # 使用寬版面以容納詳細表格
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # --- 2. 工具函式 (Helper Functions) ---
-
-def apply_color_style(val):
-    """
-    通用著色邏輯：
-    數值 > 0 -> 紅色
-    數值 < 0 -> 綠色
-    數值 = 0 -> 黑色/預設
-    """
-    if isinstance(val, (int, float)):
-        if val > 0:
-            return 'color: #ff4b4b; font-weight: bold;' # Streamlit Red
-        elif val < 0:
-            return 'color: #0df768; font-weight: bold;' # Streamlit Green (Bright)
-    return ''
-
 
 def format_stock_table(df: pd.DataFrame):
     """
@@ -52,7 +37,6 @@ def format_stock_table(df: pd.DataFrame):
     ]
 
     # --- 核心邏輯：條件格式化 ---
-    # 因為 Pandas Styler 的 apply 比較複雜，這裡我們用 apply loop 處理每一對欄位
     for col_name, diff_col, fmt in columns_config:
         if col_name in df.columns and diff_col in df.columns:
             # 1. 設定數值格式
@@ -63,7 +47,8 @@ def format_stock_table(df: pd.DataFrame):
                 val = row[d]
                 if pd.isna(val) or val == 0:
                     return ''
-                return 'color: #ff4b4b' if val > 0 else 'color: #28a745' # Red Up, Green Down
+                # 紅漲綠跌 (台股慣例：數值增加為紅)
+                return 'color: #ff4b4b' if val > 0 else 'color: #28a745'
             
             # 使用 apply(axis=1) 逐行處理
             styler = styler.apply(
@@ -87,7 +72,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 關於系統")
     st.caption("本系統整合集保結算所 (TDCC) 每週股權分散數據與 Yahoo Finance 股價，提供大戶籌碼動向分析。")
-    st.caption("Version: 1.0.0 (Beta)")
+    st.caption("Version: 1.1.0 (AI Enabled)")
 
 # --- 4. 主頁面 (Main Content) ---
 st.title("📊 台股籌碼資產戰情室")
@@ -123,7 +108,6 @@ with tab1:
                 top_growth_df = calculate_top_growth(str(date_this), str(date_last))
                 
                 if not top_growth_df.empty:
-                    # 使用 Column Config 顯示精美進度條
                     st.dataframe(
                         top_growth_df,
                         use_container_width=True,
@@ -135,6 +119,7 @@ with tab1:
                             "週增減%": st.column_config.NumberColumn(
                                 "週增減 (%)", format="%.2f %%", 
                             ),
+                            # [修正] 這裡對應 logic.py 回傳的 '持有股數' (原 shares)
                             "持有股數": st.column_config.ProgressColumn(
                                 "持有股數 (視覺化)", format="%d", min_value=0, max_value=int(top_growth_df['持有股數'].max())
                             )
@@ -166,26 +151,20 @@ with tab2:
                     st.warning(f"找不到 {target_stock} 的資料。可能是 ETF 或資料庫尚未更新。")
                 else:
                     # 1. 顯示 KPI 指標 (最新一週)
-                    latest = df_detail.iloc[0] # 因為 logic.py 已經依日期倒序排列，第 0 筆是最新的
+                    latest = df_detail.iloc[0] # 第 0 筆是最新的
                     
                     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
                     
-                    # 輔助函式：產生漂亮的 metric delta
                     def show_metric(col, label, val_key, diff_key, suffix=""):
                         val = latest.get(val_key, 0)
                         diff = latest.get(diff_key, 0)
-                        # 處理 NaN
                         if pd.isna(val): val = 0
                         if pd.isna(diff): diff = 0
                         
                         col.metric(
                             label=label,
                             value=f"{val:,.2f}{suffix}" if suffix == "%" else f"{val:,.0f}",
-                            delta=f"{diff:,.2f}{suffix}",
-                            delta_color="normal" # Streamlit 自動判斷：正紅負綠 (需在 config 設定，但預設是 正綠負紅，我們用 inverse?)
-                            # Streamlit 預設: Green=Up, Red=Down. 
-                            # 台股習慣: Red=Up. 所以這裡單獨看可能會有文化差異
-                            # 解決方案：我們在表格已經手動處理顏色，這裡先用預設，或不顯示顏色只顯示箭頭
+                            delta=f"{diff:,.2f}{suffix}"
                         )
 
                     show_metric(kpi1, "收盤價", "收盤價", "收盤價_diff")
@@ -196,48 +175,38 @@ with tab2:
                     st.divider()
 
                     # 2. 繪製圖表 (雙軸圖：股價 vs 大戶比例)
-                    # 為了畫圖，需將日期轉回 index 並且排序為 舊->新
                     chart_data = df_detail.sort_values('date', ascending=True).set_index('date')
-                    
                     st.subheader("📊 股價 vs 千張大戶持股比 走勢")
                     
-                    # 使用 Streamlit 簡單圖表，或用 Altair/Plotly 做雙軸
-                    # 這裡示範簡單版：直接用 st.line_chart (會畫在同一軸，比例尺不同較難看)
-                    # 建議：顯示兩個簡單圖表上下排列，或使用 st.bar_chart + st.line_chart
-                    
-                    # 這裡我們用 Metric 呈現重點，圖表先畫大戶比例
+                    # 這裡示範簡單版折線圖，若需雙軸可改用 plotly
                     st.line_chart(chart_data[['>1000張_比例', '>400張_比例']])
 
                     st.divider()
-                    # --- AI 分析區塊 ---
+
+                    # --- [新增] AI 分析區塊 ---
                     st.subheader("🤖 AI 籌碼解讀 (Claude 3.5)")
-
-                    # 建立一個容器來放分析結果
+                    
                     ai_container = st.container()
-
-                    # 按鈕邏輯
+                    
+                    # [修正] 縮排邏輯修正：with st.spinner 下方必須縮排
                     if st.button("⚡ 啟動 AI 智能分析", key="btn_ai_analysis"):
-                            with st.spinner(f"正在連線 Claude 分析 {target_stock} 籌碼結構..."):
-                            # 呼叫我們剛寫好的函式
+                        with st.spinner(f"正在連線 Claude 分析 {target_stock} 籌碼結構..."):
                             analysis_result = generate_chip_analysis(target_stock, df_detail)
-        
-                            # 顯示結果
+                            
                             with ai_container:
                                 st.markdown("### 📝 分析報告")
                                 st.markdown(analysis_result)
                                 st.caption("註：AI 分析僅供參考，不代表投資建議。")
 
-                    st.divider()                    
-                    
+                    st.divider()
 
                     # 3. 詳細數據表格 (套用紅漲綠跌樣式)
                     st.subheader("📋 詳細籌碼變化表")
                     
-                    # 套用我們寫好的 Styler
                     styled_df = format_stock_table(df_detail)
                     
                     st.dataframe(
                         styled_df,
                         use_container_width=True,
-                        height=500 # 固定高度讓使用者可以捲動
+                        height=500
                     )
