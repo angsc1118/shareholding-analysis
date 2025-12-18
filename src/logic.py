@@ -72,22 +72,15 @@ def fetch_stock_price(stock_id: str, start_date: str, end_date: str) -> dict:
         return {}
 
 def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
-    """
-    產生個股的「詳細籌碼分佈表」
-    """
-    # 1. 撈取原始資料
     raw_df = get_stock_raw_history(stock_id)
     if raw_df.empty:
         return pd.DataFrame()
 
-    # 2. 聚合運算 (Aggregation)
     dates = raw_df['date'].unique()
     rows = []
 
     for d in dates:
-        # 確保 d 是字串格式
         d_str = str(d)
-        
         day_data = raw_df[raw_df['date'] == d]
         
         total_persons = day_data['persons'].sum()
@@ -100,50 +93,44 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
                 return row.iloc[0]['persons'], row.iloc[0]['percent'], row.iloc[0]['shares']
             return 0, 0.0, 0
 
-        p_400, _, _       = get_level_data(12)
-        p_600, _, _       = get_level_data(13)
-        p_800, _, _       = get_level_data(14)
-        p_1000, pct_1000, shares_1000 = get_level_data(15)
+        p_1000, pct_1000, _ = get_level_data(15)
         
-        big_holders_shares = day_data[day_data['level'] >= 12]['shares'].sum()
-        big_holders_pct = day_data[day_data['level'] >= 12]['percent'].sum()
+        # 計算 >400張 (Level 12~15) 的總合
+        # Level 12=400-600, 13=600-800, 14=800-1000, 15=>1000
+        big_holders_data = day_data[day_data['level'] >= 12]
+        big_holders_pct = big_holders_data['percent'].sum()
+        big_holders_persons = big_holders_data['persons'].sum() # [新增] 計算總人數
 
         row = {
-            'date': d_str, # 這裡存成字串
+            'date': d_str,
             '總股東數': total_persons,
             '平均張數/人': avg_shares,
-            '>400張_張數': big_holders_shares / 1000,
             '>400張_比例': big_holders_pct,
-            '>1000張_人數': p_1000,
+            '>400張_人數': big_holders_persons, # [新增]
             '>1000張_比例': pct_1000,
+            '>1000張_人數': p_1000
         }
         rows.append(row)
     
     df_pivot = pd.DataFrame(rows)
     
-    # 3. 整合股價 (Yahoo Finance)
     if not df_pivot.empty:
-        # 找出日期範圍
         sorted_dates = df_pivot['date'].sort_values()
         start_date = sorted_dates.iloc[0]
         end_date = sorted_dates.iloc[-1]
         
-        # 呼叫我們的新函式抓股價
         price_map = fetch_stock_price(stock_id, start_date, end_date)
-        
-        # 進行 Map (現在兩邊都是字串，一定對得上)
         df_pivot['收盤價'] = df_pivot['date'].map(price_map)
 
-    # 4. 計算 Diff (用於 UI 顯示紅綠箭頭)
-    df_pivot = df_pivot.sort_values('date', ascending=True) # 舊 -> 新
+    df_pivot = df_pivot.sort_values('date', ascending=True)
     
-    cols_to_diff = ['總股東數', '平均張數/人', '>400張_比例', '>1000張_比例', '>1000張_人數', '收盤價']
+    # 計算 Diff (包含新增的欄位)
+    cols_to_diff = ['總股東數', '平均張數/人', '>400張_比例', '>400張_人數', '>1000張_比例', '>1000張_人數', '收盤價']
     
     for col in cols_to_diff:
         if col in df_pivot.columns:
             df_pivot[f'{col}_diff'] = df_pivot[col].diff()
     
-    # 最後再依日期倒序 (新 -> 舊)
     df_pivot = df_pivot.sort_values('date', ascending=False)
     
     return df_pivot
