@@ -1,10 +1,10 @@
-# 2025-12-20 14:35:00: [Fix] 邏輯層 - 加入二次篩選防護，修正人數加總邏輯
+# 2025-12-20 15:00:00: [Fix] 邏輯層 - 修正重複資料導致的重複加總問題 (Double Counting Fix)
 import pandas as pd
 import yfinance as yf
 import streamlit as st
 from src.database import get_market_snapshot, get_stock_raw_history
 
-# --- 市場面 ---
+# --- 市場面 (保持不變) ---
 def calculate_top_growth(this_week_date: str, last_week_date: str, top_n=20) -> pd.DataFrame:
     df_this = get_market_snapshot(this_week_date, level=15)
     df_last = get_market_snapshot(last_week_date, level=15)
@@ -46,13 +46,18 @@ def fetch_stock_price(stock_id: str, start_date: str, end_date: str) -> dict:
         return {}
 
 def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
-    """產生詳細籌碼表 (含防禦性篩選)"""
-    # 確保 stock_id 乾淨
+    """產生詳細籌碼表 (含去重複與防呆機制)"""
     clean_stock_id = str(stock_id).strip()
     
     raw_df = get_stock_raw_history(clean_stock_id)
     if raw_df.empty:
         return pd.DataFrame()
+
+    # [Fix 1] 強制確保數值欄位為數字類型 (避免 String 比較錯誤)
+    cols_to_numeric = ['level', 'persons', 'shares', 'percent']
+    for col in cols_to_numeric:
+        if col in raw_df.columns:
+            raw_df[col] = pd.to_numeric(raw_df[col], errors='coerce')
 
     dates = raw_df['date'].unique()
     rows = []
@@ -60,16 +65,20 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
     for d in dates:
         d_str = str(d)
         
-        # [Critical Fix] 防禦性篩選：確保只處理當天、當支股票的資料
-        # 防止 DB 回傳多支股票導致 sum() 爆炸
+        # 1. 篩選當日、當股
         day_data = raw_df[
             (raw_df['date'] == d) & 
             (raw_df['stock_id'] == clean_stock_id)
-        ]
+        ].copy() # copy 以避免 SettingWithCopyWarning
         
         if day_data.empty:
             continue
-            
+        
+        # [Fix 2] 關鍵修復：去重複 (Deduplication)
+        # 如果 DB 裡有重複的 level (例如兩筆 Level 15)，這行會只留下一筆
+        day_data = day_data.drop_duplicates(subset=['level'], keep='first')
+
+        # 基礎統計
         total_persons = day_data['persons'].sum()
         total_shares = day_data['shares'].sum()
         avg_shares = (total_shares / total_persons / 1000) if total_persons > 0 else 0
@@ -80,11 +89,11 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
                 return row.iloc[0]['persons'], row.iloc[0]['percent'], row.iloc[0]['shares']
             return 0, 0.0, 0
 
-        # Level 15 (1000張以上)
+        # Level 15
         p_1000, pct_1000, _ = get_level_data(15)
         
         # 計算 >400張 (Level 12 ~ 15)
-        # 這裡會加總 Level 12, 13, 14, 15 的所有資料
+        # 因為前面已經 drop_duplicates 了，這裡 sum() 就不會重複計算
         big_holders_data = day_data[day_data['level'] >= 12]
         big_holders_pct = big_holders_data['percent'].sum()
         big_holders_persons = big_holders_data['persons'].sum()
