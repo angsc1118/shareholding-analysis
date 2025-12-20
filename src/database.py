@@ -1,23 +1,16 @@
-# 2025-12-18 09:00:00: [Feat] 資料庫查詢層：實作連線快取、日期查詢、個股與市場數據撈取
+# 2025-12-20 14:30:00: [Fix] 資料庫層 - 強制 Stock ID 篩選，防止資料混雜
 import os
 import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 
-# --- 1. 連線管理 (Connection Management) ---
-
+# --- 1. 連線管理 ---
 @st.cache_resource(ttl=3600)
 def init_supabase() -> Client:
-    """
-    初始化 Supabase 連線 (使用 Streamlit Cache 避免重複連線)。
-    優先讀取 Streamlit Secrets，若無則讀取系統環境變數。
-    """
-    # 嘗試從 Streamlit secrets 讀取 (部署時用)
     try:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_SERVICE_KEY"]
     except (FileNotFoundError, KeyError):
-        # 嘗試從環境變數讀取 (本地開發或 GitHub Actions 用)
         url = os.environ.get("SUPABASE_URL")
         key = os.environ.get("SUPABASE_SERVICE_KEY")
 
@@ -26,20 +19,16 @@ def init_supabase() -> Client:
 
     return create_client(url, key)
 
-
-# --- 2. 基礎查詢 (Basic Queries) ---
-
+# --- 2. 基礎查詢 ---
 def get_latest_date():
     """取得資料庫中最新的資料日期"""
     client = init_supabase()
     try:
-        # 只需要撈一筆日期欄位，排序取最新
         response = client.table("equity_distribution") \
             .select("date") \
             .order("date", desc=True) \
             .limit(1) \
             .execute()
-        
         if response.data:
             return response.data[0]['date']
         return None
@@ -48,36 +37,34 @@ def get_latest_date():
         return None
 
 def get_available_dates(limit=10):
-    """
-    取得最近的資料日期 (使用 RPC 呼叫資料庫函數，效能最佳化)
-    """
+    """取得最近的資料日期 (使用 RPC 優化)"""
     client = init_supabase()
     try:
-        # 改用 rpc (Remote Procedure Call) 呼叫剛剛建立的 SQL 函數
+        # 使用 RPC 呼叫我們在 SQL Editor 建立的 get_distinct_dates 函數
         response = client.rpc("get_distinct_dates").execute()
-        
         if response.data:
-            # response.data 會是 [{'date_value': '2025-12-12'}, ...]
-            # 我們需要把它轉成純 list
             dates = [item['date_value'] for item in response.data]
             return dates[:limit]
         return []
     except Exception as e:
-        st.error(f"查詢日期列表失敗: {e}")
+        # 若 RPC 失敗 (可能沒建立 Function)，降級使用一般查詢 (效能較差)
+        try:
+            response = client.table("equity_distribution") \
+                .select("date") \
+                .order("date", desc=True) \
+                .limit(5000) \
+                .execute()
+            if response.data:
+                df = pd.DataFrame(response.data)
+                return sorted(df['date'].unique(), reverse=True)[:limit]
+        except:
+            pass
         return []
 
-# --- 3. 市場面查詢 (Market View) ---
-
+# --- 3. 市場面查詢 ---
 @st.cache_data(ttl=600)
 def get_market_snapshot(query_date: str, level: int = 15) -> pd.DataFrame:
-    """
-    撈取「特定日期」且「特定等級」的全市場資料。
-    用於製作：大戶排行榜
-    
-    Args:
-        query_date (str): 格式 'YYYY-MM-DD'
-        level (int): 持股分級 (預設 15 為 >1000張)
-    """
+    """撈取特定日期的全市場資料"""
     client = init_supabase()
     try:
         response = client.table("equity_distribution") \
@@ -93,39 +80,33 @@ def get_market_snapshot(query_date: str, level: int = 15) -> pd.DataFrame:
         st.error(f"查詢市場快照失敗 ({query_date}): {e}")
         return pd.DataFrame()
 
-
-# --- 4. 個股面查詢 (Individual View) ---
-
+# --- 4. 個股面查詢 (關鍵修復) ---
 @st.cache_data(ttl=600)
 def get_stock_raw_history(stock_id: str, limit_weeks: int = 12) -> pd.DataFrame:
     """
-    撈取「單一個股」的歷史資料 (包含所有 Level)。
-    用於製作：個股趨勢圖、詳細籌碼表格
-    
-    Args:
-        stock_id (str): 股票代號 (如 '2330')
-        limit_weeks (int): 回推幾週 (預設 12 週 / 一季)
+    撈取單一個股歷史 (強制過濾 stock_id)
     """
     client = init_supabase()
     
-    # 計算需要撈回幾筆資料 (每週約 15-17 個 level)
-    # limit_weeks * 17 row/week，取寬鬆一點 20
+    # [Fix] 強制轉字串並去除空白，防止查詢錯誤
+    clean_stock_id = str(stock_id).strip()
+    
+    # 計算 Row Limit
     row_limit = limit_weeks * 20 
 
     try:
         response = client.table("equity_distribution") \
             .select("*") \
-            .eq("stock_id", stock_id) \
+            .eq("stock_id", clean_stock_id) \
             .order("date", desc=True) \
             .limit(row_limit) \
             .execute()
             
         if response.data:
             df = pd.DataFrame(response.data)
-            # 確保日期格式正確
             df['date'] = pd.to_datetime(df['date']).dt.date
             return df
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"查詢個股歷史失敗 ({stock_id}): {e}")
+        st.error(f"查詢個股歷史失敗 ({clean_stock_id}): {e}")
         return pd.DataFrame()
