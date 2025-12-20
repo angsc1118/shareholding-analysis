@@ -1,4 +1,4 @@
-# 2025-12-20 15:00:00: [Fix] 邏輯層 - 修正重複資料導致的重複加總問題 (Double Counting Fix)
+# 2025-12-20 15:30:00: [Debug] 邏輯層 - 強制顯示原始數據狀態，診斷資料混雜問題
 import pandas as pd
 import yfinance as yf
 import streamlit as st
@@ -46,14 +46,60 @@ def fetch_stock_price(stock_id: str, start_date: str, end_date: str) -> dict:
         return {}
 
 def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
-    """產生詳細籌碼表 (含去重複與防呆機制)"""
+    """產生詳細籌碼表 (Debug Mode)"""
+    
+    # 1. 清洗 Stock ID
     clean_stock_id = str(stock_id).strip()
     
+    # 2. 撈取資料
     raw_df = get_stock_raw_history(clean_stock_id)
+    
+    # ================= [DEBUG START] =================
+    # 在網頁上直接印出除錯資訊
+    with st.expander("🚨 DATA DEBUGGER (資料診斷室)", expanded=True):
+        st.write(f"🎯 查詢目標 Stock ID: `{clean_stock_id}` (len={len(clean_stock_id)})")
+        
+        if raw_df.empty:
+            st.error("❌ get_stock_raw_history 回傳為空！")
+        else:
+            # 檢查 1: 回傳資料中包含哪些股票代號？
+            unique_stocks = raw_df['stock_id'].unique()
+            st.write(f"📦 資料庫回傳了哪些股票: {unique_stocks}")
+            
+            if len(unique_stocks) > 1:
+                st.error(f"⚠️ 嚴重警告：撈回了多支股票！請檢查 database.py 的過濾邏輯。")
+            
+            # 檢查 2: 隨機取一天的資料來檢查 level 是否重複
+            sample_date = raw_df['date'].iloc[0]
+            st.write(f"📅 抽查日期: `{sample_date}`")
+            
+            # 模擬計算邏輯前的篩選
+            # 注意：這裡刻意不加 drop_duplicates，看看原始樣貌
+            debug_day_data = raw_df[
+                (raw_df['date'] == sample_date) & 
+                (raw_df['stock_id'] == clean_stock_id)
+            ]
+            
+            st.write("📊 該日期的原始資料 (前 20 筆):")
+            st.dataframe(debug_day_data)
+            
+            # 檢查 3: 統計 Level 重複狀況
+            level_counts = debug_day_data['level'].value_counts()
+            if (level_counts > 1).any():
+                st.error("⚠️ 發現 Level 重複！這代表同一天、同一支股票、同一個 Level 有多筆數據。")
+                st.write(level_counts)
+            else:
+                st.success("✅ 該日期的 Level 沒有重複，資料結構正常。")
+
+            # 檢查 4: 試算一下加總
+            total_sum = debug_day_data[debug_day_data['level'] >= 12]['persons'].sum()
+            st.write(f"🧮 測試加總 (Level >= 12) 人數: {total_sum}")
+    # ================= [DEBUG END] =================
+
     if raw_df.empty:
         return pd.DataFrame()
 
-    # [Fix 1] 強制確保數值欄位為數字類型 (避免 String 比較錯誤)
+    # [Fix] 轉型
     cols_to_numeric = ['level', 'persons', 'shares', 'percent']
     for col in cols_to_numeric:
         if col in raw_df.columns:
@@ -65,20 +111,18 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
     for d in dates:
         d_str = str(d)
         
-        # 1. 篩選當日、當股
+        # [Filter] 嚴格篩選
         day_data = raw_df[
             (raw_df['date'] == d) & 
             (raw_df['stock_id'] == clean_stock_id)
-        ].copy() # copy 以避免 SettingWithCopyWarning
+        ].copy()
         
         if day_data.empty:
             continue
         
-        # [Fix 2] 關鍵修復：去重複 (Deduplication)
-        # 如果 DB 裡有重複的 level (例如兩筆 Level 15)，這行會只留下一筆
+        # [Fix] 去重複：若 DB 有髒資料，強制只留一筆
         day_data = day_data.drop_duplicates(subset=['level'], keep='first')
 
-        # 基礎統計
         total_persons = day_data['persons'].sum()
         total_shares = day_data['shares'].sum()
         avg_shares = (total_shares / total_persons / 1000) if total_persons > 0 else 0
@@ -89,11 +133,8 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
                 return row.iloc[0]['persons'], row.iloc[0]['percent'], row.iloc[0]['shares']
             return 0, 0.0, 0
 
-        # Level 15
         p_1000, pct_1000, _ = get_level_data(15)
         
-        # 計算 >400張 (Level 12 ~ 15)
-        # 因為前面已經 drop_duplicates 了，這裡 sum() 就不會重複計算
         big_holders_data = day_data[day_data['level'] >= 12]
         big_holders_pct = big_holders_data['percent'].sum()
         big_holders_persons = big_holders_data['persons'].sum()
@@ -111,7 +152,6 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
     
     df_pivot = pd.DataFrame(rows)
     
-    # 整合股價
     if not df_pivot.empty:
         sorted_dates = df_pivot['date'].sort_values()
         start_date = sorted_dates.iloc[0]
@@ -120,7 +160,6 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
         price_map = fetch_stock_price(clean_stock_id, start_date, end_date)
         df_pivot['收盤價'] = df_pivot['date'].map(price_map)
 
-    # 計算 Diff
     df_pivot = df_pivot.sort_values('date', ascending=True)
     cols_to_diff = ['總股東數', '平均張數/人', '>400張_比例', '>400張_人數', '>1000張_比例', '>1000張_人數', '收盤價']
     
