@@ -1,7 +1,11 @@
-name: Run Notify Bot
+name: Weekly Notify Bot
 
-# 手動觸發
 on:
+  # 1. 自動排程：UTC 05:30 (台灣時間 13:30)，每週日 (0)
+  schedule:
+    - cron: '30 5 * * 0'
+  
+  # 2. 保留手動觸發功能 (方便測試)
   workflow_dispatch:
 
 jobs:
@@ -15,8 +19,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          # [Fix] 升級 Python 版本至 3.11 以支援 yfinance 新語法
-          python-version: '3.11'
+          python-version: '3.11' # 維持 3.11 以支援 yfinance
 
       - name: Install dependencies
         run: |
@@ -24,7 +27,6 @@ jobs:
 
       - name: Execute Notify Bot
         env:
-          # 注入所有需要的環境變數
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
