@@ -1,4 +1,4 @@
-# 2025-12-28 16:10:00: [Fix] 邏輯層 - 優化股價抓取流程，減少 yfinance 報錯雜訊
+# 2025-12-28 17:00:00: [Fix] 邏輯層 - 移除 yfinance progress 參數以確保相容性
 import pandas as pd
 import yfinance as yf
 import streamlit as st
@@ -26,11 +26,12 @@ def calculate_top_growth(this_week_date: str, last_week_date: str, top_n=20) -> 
     final_df.columns = ['股票代號', '大戶持股比%', '週增減%', '持有股數']
     return final_df
 
-# --- 2. 個股分析邏輯 (優化股價抓取) ---
+# --- 2. 個股分析邏輯 ---
 
 def fetch_stock_price(stock_id: str, start_date: str, end_date: str) -> dict:
     """
     抓取股價 (自動判斷上市 .TW 或上櫃 .TWO)
+    [Fix] 移除 progress=False 參數，解決部分版本不相容問題
     """
     try:
         # end date 加幾天緩衝，確保包含最後一天
@@ -38,18 +39,15 @@ def fetch_stock_price(stock_id: str, start_date: str, end_date: str) -> dict:
         
         # 嘗試 1: 上市 (.TW)
         ticker_tw = f"{stock_id}.TW"
-        # progress=False 關閉進度條，減少 Log 雜訊
-        data = yf.Ticker(ticker_tw).history(start=start_date, end=end_buffer, progress=False)
+        data = yf.Ticker(ticker_tw).history(start=start_date, end=end_buffer)
         
         # 嘗試 2: 上櫃 (.TWO)
         if data.empty:
-            # 這裡可以印個 Info，證明程式有在做事，而不是單純報錯
-            # print(f"ℹ️ {ticker_tw} 無資料，嘗試切換為上櫃 (.TWO)...")
             ticker_two = f"{stock_id}.TWO"
-            data = yf.Ticker(ticker_two).history(start=start_date, end=end_buffer, progress=False)
+            data = yf.Ticker(ticker_two).history(start=start_date, end=end_buffer)
         
         if data.empty:
-            print(f"⚠️ {stock_id} 股價抓取失敗 (上市/上櫃皆無資料)")
+            # print(f"⚠️ {stock_id} 股價抓取失敗 (上市/上櫃皆無資料)")
             return {}
 
         data.index = data.index.strftime('%Y-%m-%d')
