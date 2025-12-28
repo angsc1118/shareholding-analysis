@@ -1,10 +1,10 @@
-# 2025-12-20 17:00:00: [Fix] 邏輯層 - 嚴格 Level 篩選 (12-15) + 空值預處理
+# 2025-12-28 16:10:00: [Fix] 邏輯層 - 優化股價抓取流程，減少 yfinance 報錯雜訊
 import pandas as pd
 import yfinance as yf
 import streamlit as st
 from src.database import get_market_snapshot, get_stock_raw_history
 
-# --- 1. 市場分析邏輯 ---
+# --- 1. 市場分析邏輯 (保持不變) ---
 def calculate_top_growth(this_week_date: str, last_week_date: str, top_n=20) -> pd.DataFrame:
     df_this = get_market_snapshot(this_week_date, level=15)
     df_last = get_market_snapshot(last_week_date, level=15)
@@ -26,33 +26,47 @@ def calculate_top_growth(this_week_date: str, last_week_date: str, top_n=20) -> 
     final_df.columns = ['股票代號', '大戶持股比%', '週增減%', '持有股數']
     return final_df
 
-# --- 2. 個股分析邏輯 ---
+# --- 2. 個股分析邏輯 (優化股價抓取) ---
+
 def fetch_stock_price(stock_id: str, start_date: str, end_date: str) -> dict:
+    """
+    抓取股價 (自動判斷上市 .TW 或上櫃 .TWO)
+    """
     try:
-        ticker = f"{stock_id}.TW"
+        # end date 加幾天緩衝，確保包含最後一天
         end_buffer = pd.to_datetime(end_date) + pd.Timedelta(days=5)
-        data = yf.Ticker(ticker).history(start=start_date, end=end_buffer)
+        
+        # 嘗試 1: 上市 (.TW)
+        ticker_tw = f"{stock_id}.TW"
+        # progress=False 關閉進度條，減少 Log 雜訊
+        data = yf.Ticker(ticker_tw).history(start=start_date, end=end_buffer, progress=False)
+        
+        # 嘗試 2: 上櫃 (.TWO)
+        if data.empty:
+            # 這裡可以印個 Info，證明程式有在做事，而不是單純報錯
+            # print(f"ℹ️ {ticker_tw} 無資料，嘗試切換為上櫃 (.TWO)...")
+            ticker_two = f"{stock_id}.TWO"
+            data = yf.Ticker(ticker_two).history(start=start_date, end=end_buffer, progress=False)
         
         if data.empty:
-            ticker = f"{stock_id}.TWO"
-            data = yf.Ticker(ticker).history(start=start_date, end=end_buffer)
-        
-        if data.empty:
+            print(f"⚠️ {stock_id} 股價抓取失敗 (上市/上櫃皆無資料)")
             return {}
 
         data.index = data.index.strftime('%Y-%m-%d')
         return data['Close'].to_dict()
+        
     except Exception as e:
+        print(f"❌ 股價 API 異常: {e}")
         return {}
 
 def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
+    """產生詳細籌碼表 (含去重複與防呆機制)"""
     clean_stock_id = str(stock_id).strip()
     
     raw_df = get_stock_raw_history(clean_stock_id)
     if raw_df.empty:
         return pd.DataFrame()
 
-    # 強制轉型
     cols_to_numeric = ['level', 'persons', 'shares', 'percent']
     for col in cols_to_numeric:
         if col in raw_df.columns:
@@ -64,7 +78,6 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
     for d in dates:
         d_str = str(d)
         
-        # 1. 篩選
         day_data = raw_df[
             (raw_df['date'] == d) & 
             (raw_df['stock_id'] == clean_stock_id)
@@ -73,7 +86,7 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
         if day_data.empty:
             continue
         
-        # 2. 去重複
+        # 去重複
         day_data = day_data.drop_duplicates(subset=['level'], keep='first')
 
         total_persons = day_data['persons'].sum()
@@ -86,10 +99,8 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
                 return row.iloc[0]['persons'], row.iloc[0]['percent'], row.iloc[0]['shares']
             return 0, 0.0, 0
 
-        # Level 15
         p_1000, pct_1000, _ = get_level_data(15)
         
-        # 計算 >400張 (Level 12, 13, 14, 15)
         target_levels = [12, 13, 14, 15]
         big_holders_data = day_data[day_data['level'].isin(target_levels)]
         
@@ -125,7 +136,6 @@ def get_stock_distribution_table(stock_id: str) -> pd.DataFrame:
     for col in cols_to_diff:
         if col in df_pivot.columns:
             df_pivot[f'{col}_diff'] = df_pivot[col].diff()
-            # [Fix] 這裡不填 0，保留 NaN 給前端判定顏色(第一筆不變色)，但在 format 前端會處理
     
     df_pivot = df_pivot.sort_values('date', ascending=False)
     
