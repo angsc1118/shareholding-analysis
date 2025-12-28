@@ -29,4 +29,5 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python src/notify_bot.py
+          # [Fix] 使用 -m 參數執行，讓 Python 能正確識別 src 套件路徑
+          python -m src.notify_bot
