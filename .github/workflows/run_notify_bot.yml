@@ -15,7 +15,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          # [Fix] 升級 Python 版本至 3.11 以支援 yfinance 新語法
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
@@ -29,5 +30,4 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # [Fix] 使用 -m 參數執行，讓 Python 能正確識別 src 套件路徑
           python -m src.notify_bot
